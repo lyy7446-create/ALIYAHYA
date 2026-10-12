@@ -1,0 +1,6 @@
+{
+  "name": "AI MM VIP Institutional Dashboard",
+  "description": "Smart Money Concepts (SMC) & ICT trading indicator dashboard for Gold and Forex, featuring order blocks, FVG, liquid pools, BOS/CHOCH markings, dynamic RR planners, and auto Telegram alert dispatches.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
