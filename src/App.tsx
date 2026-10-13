@@ -9,7 +9,6 @@ import {
   TrendCondition 
 } from './types';
 import { 
-  generateInitialCandles, 
   extractInstitutionalZones, 
   getSmartTrendCondition, 
   getMtfScannerResults, 
@@ -510,10 +509,10 @@ export default function App() {
   const [isCalibrationModalOpen, setIsCalibrationModalOpen] = useState<boolean>(false);
   const [targetBrokerPriceInput, setTargetBrokerPriceInput] = useState<string>('');
 
-  // 🤖 Automatic LIMIT Order Hanging / Placement Mode
+  // 🤖 Automatic LIMIT Order Hanging / Placement Mode (Disabled by default for safety)
   const [autoPlaceLimitOrders, setAutoPlaceLimitOrders] = useState<boolean>(() => {
     const saved = localStorage.getItem('mm_vip_auto_place_limit');
-    return saved !== null ? saved === 'true' : true;
+    return saved !== null ? saved === 'true' : false;
   });
 
   const autoPlaceLimitOrdersRef = useRef<boolean>(autoPlaceLimitOrders);
@@ -565,18 +564,22 @@ export default function App() {
 
       // 3. Fetch fresh real-time Gold candles directly from TradingView / Spot Market API proxy
       const freshCandles = await fetchRealCandlesFromAPI('XAUUSD', selectedTimeframe, 90);
-      const finalCandles = (freshCandles && freshCandles.length > 0) ? freshCandles : generateInitialCandles('XAUUSD', 90);
+      if (!freshCandles || freshCandles.length === 0) {
+        setIsLiveConnectionFailed(true);
+        showToast("⚠️ تعذر جلب شموع الذهب الحقيقية من مزود البيانات. تم تعليق التحليل مؤقتًا لحين توفر البيانات.");
+        return;
+      }
       
-      setCandles(finalCandles);
+      setCandles(freshCandles);
 
-      const detectedZones = extractInstitutionalZones(finalCandles, 'XAUUSD');
+      const detectedZones = extractInstitutionalZones(freshCandles, 'XAUUSD');
       setZones(detectedZones);
 
-      const lastClose = finalCandles[finalCandles.length - 1].close;
+      const lastClose = freshCandles[freshCandles.length - 1].close;
       setManualEntryPrice(lastClose);
       setCurrentPrices((prev) => ({ ...prev, XAUUSD: lastClose }));
 
-      const starterSignal = generateSmartSignal(finalCandles, 'XAUUSD', undefined, strictSMCMode, smartAutoManage, selectedTimeframe, false, true);
+      const starterSignal = generateSmartSignal(freshCandles, 'XAUUSD', undefined, strictSMCMode, smartAutoManage, selectedTimeframe, false, true);
       setActiveSignal(starterSignal);
 
       setIsLiveConnectionFailed(false);
@@ -585,18 +588,9 @@ export default function App() {
       addAlertLog(successMsg);
       showToast(successMsg);
     } catch (err: any) {
-      console.warn("Handled Gold TradingView fallback smoothly:", err?.message || err);
-      const fallbackCandles = generateInitialCandles('XAUUSD', 90);
-      setCandles(fallbackCandles);
-      const detectedZones = extractInstitutionalZones(fallbackCandles, 'XAUUSD');
-      setZones(detectedZones);
-      const lastClose = fallbackCandles[fallbackCandles.length - 1].close;
-      setManualEntryPrice(lastClose);
-      setCurrentPrices((prev) => ({ ...prev, XAUUSD: lastClose }));
-      const starterSignal = generateSmartSignal(fallbackCandles, 'XAUUSD', undefined, strictSMCMode, smartAutoManage, selectedTimeframe, false, true);
-      setActiveSignal(starterSignal);
-      setIsLiveConnectionFailed(false);
-      showToast("⚡ تم تنشيط الذهب وربطه بـ TradingView بنجاح!");
+      console.warn("Gold TradingView connection error:", err?.message || err);
+      setIsLiveConnectionFailed(true);
+      showToast("⚠️ انقطع الاتصال بمزود بيانات الذهب المباشر. تم إيقاف التحليل الحقيقي مؤقتاً.");
     } finally {
       setIsRealPricesLoading(false);
     }
@@ -1049,15 +1043,20 @@ ${zoneLevels.join("\n")}
         try {
           const liveCandles = await fetchRealCandlesFromAPI(market, selectedTimeframe, 85);
           if (!active) return;
-          const safeCandles = (liveCandles && liveCandles.length > 0) ? liveCandles : generateInitialCandles(market, 80);
-          setCandles(safeCandles);
+          if (!liveCandles || liveCandles.length === 0) {
+            setIsLiveConnectionFailed(true);
+            addAlertLog(`⚠️ انقطع الاتصال بمزود بيانات زوج (${market}). تم إيقاف إصدار الإشارات مؤقتًا.`);
+            return;
+          }
+
+          setCandles(liveCandles);
           lastLoadedMarketRef.current = market;
 
           // Render underlying zones
-          const detectedZones = extractInstitutionalZones(safeCandles, market);
+          const detectedZones = extractInstitutionalZones(liveCandles, market);
           setZones(detectedZones);
 
-          const lastClose = safeCandles[safeCandles.length - 1]?.close ?? MARKET_BASES[market].base;
+          const lastClose = liveCandles[liveCandles.length - 1]?.close ?? MARKET_BASES[market].base;
           setManualEntryPrice(lastClose);
 
           // Update current price index
@@ -1066,19 +1065,19 @@ ${zoneLevels.join("\n")}
             [market]: lastClose,
           }));
 
-          // Generate reference smart signal from technical indicators
-          const starterSignal = generateSmartSignal(safeCandles, market, undefined, strictSMCMode, smartAutoManage, selectedTimeframe);
+          // Generate reference smart signal from technical indicators on real candles
+          const starterSignal = generateSmartSignal(liveCandles, market, undefined, strictSMCMode, smartAutoManage, selectedTimeframe);
           setActiveSignal(starterSignal);
           setAllSignals((prev) => {
             const hasExisting = prev.some(s => s && s.market === market && (s.status === 'Pending' || s.status === 'Active'));
-            if (!hasExisting) {
+            if (!hasExisting && starterSignal.qualityScore > 0) {
               return [starterSignal, ...prev];
             }
             return prev;
           });
 
           setIsLiveConnectionFailed(false);
-          addAlertLog(`📈 تم جلب الأسعار وحركات الشموع الحية الفوقية لزوج (${market}) بنجاح من TradingView سيرفر.`);
+          addAlertLog(`📈 تم جلب الأسعار وحركات الشموع الحية لزوج (${market}) بنجاح.`);
         } catch (err) {
           console.error("Real price load failed, connection offline:", err);
           if (!active) return;
@@ -1091,45 +1090,11 @@ ${zoneLevels.join("\n")}
             setIsRealPricesLoading(false);
           }
         }
-      } else {
-        // Retrieve saved candles if available to preserve current price
-        const savedCandlesStr = localStorage.getItem(`mm_vip_candles_${market}`);
-        let generated;
-        if (savedCandlesStr) {
-          try {
-            const parsed = JSON.parse(savedCandlesStr);
-            if (areCandlesValidForMarket(parsed, market)) {
-              generated = parsed;
-            } else {
-              generated = generateInitialCandles(market, 85);
-            }
-          } catch (e) {
-            generated = generateInitialCandles(market, 85);
-          }
-        } else {
-          generated = generateInitialCandles(market, 85);
-        }
-        setCandles(generated);
-        lastLoadedMarketRef.current = market;
-
-        // Render underlying zones
-        const detectedZones = extractInstitutionalZones(generated, market);
-        setZones(detectedZones);
-
-        const lastClose = generated[generated.length - 1].close;
-        setManualEntryPrice(lastClose);
-
-        // Update current price index
-        setCurrentPrices((prev) => ({
-          ...prev,
-          [market]: lastClose,
-        }));
-
-        // Generate reference smart signal
-        const starterSignal = generateSmartSignal(generated, market, undefined, strictSMCMode, smartAutoManage, selectedTimeframe);
-        setActiveSignal(starterSignal);
-
-        addAlertLog(`🔄 تم تحميل هيكل بيانات السوق المحاكى (${market}) مع تتبع أحدث مستويات المؤسسات المعتمدة.`);
+        // Offline mode: do not create false trading signals from synthetic candles
+        setCandles([]);
+        setIsLiveConnectionFailed(true);
+        setActiveSignal(null);
+        addAlertLog(`⚠️ المنصة في وضع البيانات الحقيقية الصارمة. في انتظار اتصال مزود السوق لزوج (${market}).`);
       }
     };
 
@@ -1394,7 +1359,10 @@ ${zoneLevels.join("\n")}
         isFetchingRef.current = true;
         try {
           const liveCandles = await fetchRealCandlesFromAPI(market, selectedTimeframeRef.current, 85);
-          if (!liveCandles || liveCandles.length === 0) return;
+          if (!liveCandles || liveCandles.length === 0) {
+            setIsLiveConnectionFailed(true);
+            return;
+          }
 
           setCandles(liveCandles);
           setIsLiveConnectionFailed(false);
@@ -1507,6 +1475,28 @@ ${zoneLevels.join("\n")}
                   changed = true;
                 }
 
+                // Simultaneous TP & SL check within the current candle range (Candle High/Low ambivalence)
+                const candleLow = lastCandle.low;
+                const candleHigh = lastCandle.high;
+                const isSlInCandle = direction === 1 ? candleLow <= currentSl : candleHigh >= currentSl;
+                const isTpInCandle = direction === 1 ? candleHigh >= signal.tp1 : candleLow <= signal.tp1;
+
+                if (isSlInCandle && isTpInCandle) {
+                  changed = true;
+                  const ambiguousMsg = `⚖️ [إشارة غير محسومة - AMBIGUOUS] تحرك السعر داخل الشمعة ووصل للهدف والاستوب معاً لصفقة ${market}. تم تسجيلها غير محسومة لحماية دقة الإحصائيات.`;
+                  showToast(ambiguousMsg);
+                  addAlertLog(ambiguousMsg);
+                  lastPendingPlacedTimeRef.current = 0;
+                  return {
+                    ...signal,
+                    status: 'AMBIGUOUS' as const,
+                    points: 0,
+                    closePrice: latestPrice,
+                    resolvedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    resolvedAtTimestamp: Date.now()
+                  };
+                }
+
                 // Sl check
                 const isHitSL = direction === 1 ? latestPrice <= currentSl : latestPrice >= currentSl;
                 if (isHitSL) {
@@ -1529,7 +1519,14 @@ ${zoneLevels.join("\n")}
                   dispatchSLHit(signal, finalLossPoints, isSecured);
                   triggerAudioTick(audioType);
                   lastPendingPlacedTimeRef.current = 0; // Trigger instant search for next entry
-                  return { ...signal, status: 'SL' as const, points: finalLossPoints, closePrice: currentSl };
+                  return { 
+                    ...signal, 
+                    status: 'SL' as const, 
+                    points: finalLossPoints, 
+                    closePrice: currentSl,
+                    resolvedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    resolvedAtTimestamp: Date.now()
+                  };
                 }
 
                 // TP3 check (if reached before TP2 or on large expansion)
@@ -1543,7 +1540,14 @@ ${zoneLevels.join("\n")}
                   dispatchTPReached(signal, 'TP3', finalProfitPoints);
                   triggerAudioTick('success');
                   lastPendingPlacedTimeRef.current = 0; // Trigger instant search for next entry
-                  return { ...signal, status: 'TP3' as const, points: finalProfitPoints, closePrice: signal.tp3 };
+                  return { 
+                    ...signal, 
+                    status: 'TP3' as const, 
+                    points: finalProfitPoints, 
+                    closePrice: signal.tp3,
+                    resolvedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    resolvedAtTimestamp: Date.now()
+                  };
                 }
 
                 // TP2 check - Automatically closes position and searches for next setup upon hitting Target 2
@@ -1557,7 +1561,14 @@ ${zoneLevels.join("\n")}
                   dispatchTPReached(signal, 'TP2', finalProfitPoints);
                   triggerAudioTick('success');
                   lastPendingPlacedTimeRef.current = 0; // Trigger instant search for next entry
-                  return { ...signal, status: 'TP2' as const, points: finalProfitPoints, closePrice: signal.tp2 };
+                  return { 
+                    ...signal, 
+                    status: 'TP2' as const, 
+                    points: finalProfitPoints, 
+                    closePrice: signal.tp2,
+                    resolvedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    resolvedAtTimestamp: Date.now()
+                  };
                 }
 
                 // TP1 check
@@ -1602,7 +1613,7 @@ ${zoneLevels.join("\n")}
 
             if (!openTradeForMarket) {
               const now = Date.now();
-              const shouldGenerateNew = !activeSignalRef.current || (activeSignalRef.current.status !== 'Pending' && activeSignalRef.current.status !== 'Active') || (now - lastPendingPlacedTimeRef.current > 30000);
+              const shouldGenerateNew = (!activeSignalRef.current || (activeSignalRef.current.status !== 'Pending' && activeSignalRef.current.status !== 'Active') || (now - lastPendingPlacedTimeRef.current > 30000)) && liveCandles && liveCandles.length >= 5;
               if (shouldGenerateNew) {
                 lastPendingPlacedTimeRef.current = now;
                 const freshSignal = generateSmartSignal(
@@ -1615,10 +1626,12 @@ ${zoneLevels.join("\n")}
                   false,
                   true
                 );
-                freshSignal.quality = selectedQualityRef.current;
+                
+                if (freshSignal && freshSignal.qualityScore > 0) {
+                  freshSignal.quality = selectedQualityRef.current;
 
-                // 🤖 Auto-Hang LIMIT Order Mode: If enabled, automatically commit newly formed setup to Pending list
-                if (autoPlaceLimitOrdersRef.current && !isWeekendAndNotBtc(market)) {
+                  // 🤖 Auto-Hang LIMIT Order Mode: If enabled, automatically commit newly formed setup to Pending list
+                  if (autoPlaceLimitOrdersRef.current && !isWeekendAndNotBtc(market)) {
                   const autoOrder: TradingSignal = {
                     ...freshSignal,
                     timeframe: freshSignal.timeframe || selectedTimeframeRef.current,
@@ -1642,6 +1655,7 @@ ${zoneLevels.join("\n")}
                   setActiveSignal(freshSignal);
                 }
               }
+            }
             } else {
               // Maintain chart and HUD synchronization with the real placed active or pending trade
               if (!activeSignalRef.current || activeSignalRef.current.id !== openTradeForMarket.id || activeSignalRef.current.points !== openTradeForMarket.points || activeSignalRef.current.status !== openTradeForMarket.status) {
@@ -1963,9 +1977,12 @@ ${zoneLevels.join("\n")}
       let curCandles = candles;
       if (!curCandles || curCandles.length < 10) {
         const fresh = await fetchRealCandlesFromAPI(market, selectedTimeframe, 90);
-        if (fresh && fresh.length > 0) {
+        if (fresh && fresh.length >= 10) {
           curCandles = fresh;
           setCandles(fresh);
+        } else {
+          showToast("⚠️ تعذر جلب شموع كافية لإصدار توصية حقيقية. تم إيقاف العملية بأمان.");
+          return;
         }
       }
 
@@ -2121,13 +2138,17 @@ ${zoneLevels.join("\n")}
   };
 
   // Derive stats variables from signals history for the premium VVIP dashboard header
+  const decisiveHistory = allSignals.filter(
+    (s) => s.status === 'TP1' || s.status === 'TP2' || s.status === 'TP3' || s.status === 'SL'
+  );
   const completedHistory = allSignals.filter(
     (s) => s.status !== 'Pending' && s.status !== 'Active' && s.status !== 'Cancelled'
   );
-  const wins = completedHistory.filter((s) => s.status.startsWith('TP') || s.points >= 0).length;
-  const losses = completedHistory.filter((s) => s.status === 'SL' && s.points < 0).length;
-  const winRate = completedHistory.length > 0 ? Math.round((wins / completedHistory.length) * 100) : 0;
-  const totalNetPoints = completedHistory.reduce((sum, s) => sum + s.points, 0);
+  const ambiguousCount = allSignals.filter((s) => s.status === 'AMBIGUOUS').length;
+  const wins = decisiveHistory.filter((s) => s.status.startsWith('TP') || s.points >= 0).length;
+  const losses = decisiveHistory.filter((s) => s.status === 'SL' && s.points < 0).length;
+  const winRate = decisiveHistory.length > 0 ? Math.round((wins / decisiveHistory.length) * 100) : 0;
+  const totalNetPoints = decisiveHistory.reduce((sum, s) => sum + s.points, 0);
 
   // Export current performance stats and completed trades as a CSV file
   const handleExportCSV = () => {

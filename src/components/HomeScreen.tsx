@@ -106,11 +106,21 @@ export default function HomeScreen({
 
       {/* 3. Market Card */}
       <section className="market-card">
-        <h2>{market?.symbol || "XAUUSD"}</h2>
-        <div className={`price ${!isConnected ? "waiting-price" : ""}`}>
-          {isConnected ? (market?.price ?? "0.00") : "بانتظار الاتصال"}
+        <div className="flex items-center justify-between">
+          <h2>{market?.symbol || "XAUUSD"}</h2>
+          {!isConnected && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
+              DATA_UNAVAILABLE
+            </span>
+          )}
         </div>
-        <div>فريم {market?.timeframe || "M15"}</div>
+        <div className={`price ${!isConnected ? "waiting-price" : ""}`}>
+          {isConnected ? (market?.price ?? "0.00") : "DATA_UNAVAILABLE (بانتظار البيانات)"}
+        </div>
+        <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <span>فريم {market?.timeframe || "M15"}</span>
+          <span>{market?.symbol === 'XAUUSD' ? 'مرجع: PAXG/USD Spot Gold Proxy' : 'Real-time Feed'}</span>
+        </div>
       </section>
 
       {/* 4. Signal Card */}

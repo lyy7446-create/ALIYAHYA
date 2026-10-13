@@ -245,29 +245,14 @@ async function startServer() {
       }
 
       if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
-        console.log(`[Proxy] External providers unavailable (${String(lastError)}). Generating realistic baseline candles for ${market}...`);
-        const bases: Record<string, { base: number; step: number }> = {
-          XAUUSD: { base: 4641.0, step: 0.5 },
-          EURUSD: { base: 1.1678, step: 0.00010 },
-          GBPUSD: { base: 1.3628, step: 0.00010 },
-          BTCUSD: { base: 77400.0, step: 25.0 },
-        };
-        const cfg = bases[market] || { base: 100.0, step: 0.5 };
-        let currentPrice = cfg.base;
-        const now = Date.now();
-        const intervalMins = interval === '1m' ? 1 : interval === '5m' ? 5 : interval === '15m' ? 15 : interval === '30m' ? 30 : interval === '1h' ? 60 : interval === '4h' ? 240 : 1440;
-        const generated: any[] = [];
-        for (let i = count; i >= 0; i--) {
-          const t = now - (i * intervalMins * 60 * 1000);
-          const noise = (Math.random() - 0.49) * cfg.step * 2;
-          const open = currentPrice;
-          const close = open + noise;
-          const high = Math.max(open, close) + Math.random() * cfg.step;
-          const low = Math.min(open, close) - Math.random() * cfg.step;
-          currentPrice = close;
-          generated.push([t, open.toFixed(4), high.toFixed(4), low.toFixed(4), close.toFixed(4), Math.floor(1000 + Math.random() * 5000)]);
-        }
-        rawData = generated;
+        console.warn(`[Proxy] External data providers unavailable for ${market}: ${String(lastError)}`);
+        res.setHeader("Cache-Control", "no-cache");
+        return res.status(503).json({
+          success: false,
+          code: "DATA_UNAVAILABLE",
+          error: `Real market data unavailable for ${market}`,
+          details: String(lastError)
+        });
       }
 
       if (market === 'XAUUSD' && Array.isArray(rawData) && rawData.length > 0) {
@@ -296,7 +281,10 @@ async function startServer() {
       }
 
       res.setHeader("Cache-Control", "no-cache");
-      return res.json({ success: true, data: rawData });
+      const dataSource = market === 'XAUUSD' 
+        ? 'Spot Gold (Binance PAXGUSDT reference / OANDA Spot)' 
+        : (market === 'BTCUSD' || market === 'ETHUSDT' ? 'Binance Spot' : 'Yahoo Finance Spot Feed');
+      return res.json({ success: true, data: rawData, dataSource });
     } catch (e: any) {
       console.error("Error in /api/candles:", e);
       return res.status(500).json({ success: false, error: e.message || String(e) });
@@ -1016,46 +1004,14 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "Missing token or signal data" });
       }
 
-      console.log(`[Deriv Engine] Executing real trade: ${signal.type} on ${signal.market}`);
-      
-      // WebSocket execution logic
-      const ws = new (require('ws'))(`wss://ws.binaryws.com/websockets/v3?app_id=${DERIV_APP_ID}`);
-      
-      const tradeResult = await new Promise((resolve) => {
-        ws.on('open', () => {
-          ws.send(JSON.stringify({ authorize: token }));
-        });
-        
-        ws.on('message', (data: any) => {
-          const response = JSON.parse(data);
-          if (response.authorize) {
-            // Place trade order
-            const buyParams = {
-              buy: 1,
-              price: signal.entry,
-              parameters: {
-                symbol: signal.market,
-                contract_type: signal.type.startsWith('BUY') ? 'CALL' : 'PUT',
-                amount: 10 // Default stake
-              }
-            };
-            ws.send(JSON.stringify(buyParams));
-          } else if (response.buy) {
-            resolve({ success: true, tradeId: response.buy.contract_id });
-            ws.close();
-          } else if (response.error) {
-            resolve({ success: false, error: response.error.message });
-            ws.close();
-          }
-        });
-
-        setTimeout(() => resolve({ success: false, error: "Trade execution timeout" }), 10000);
+      // Safety check: Temporarily disable live real orders until the Deriv contract workflow is fully implemented and verified
+      return res.status(503).json({
+        success: false,
+        error: "REAL_EXECUTION_TEMPORARILY_DISABLED",
+        message: "تم تعطيل إرسال الأوامر الحقيقية مؤقتًا لأغراض الأمان إلى حين اكتمال تدفق واعتماد أوامر Deriv واختبار سلامتها."
       });
-
-      return res.json(tradeResult);
     } catch (e: any) {
-      console.error("[Deriv Engine] Trade execution error:", e);
-      return res.status(500).json({ success: false, error: e.message });
+      return res.status(500).json({ success: false, error: e.message || String(e) });
     }
   });
 

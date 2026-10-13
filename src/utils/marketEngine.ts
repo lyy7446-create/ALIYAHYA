@@ -210,16 +210,45 @@ export async function fetchRealCandlesFromAPI(market: MarketSymbol, timeframe: s
 
   // 3. Safe fallback if completely offline or unreachable
   if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
-    return generateInitialCandles(market, count);
+    return [];
   }
 
-  const candles: Candle[] = rawData.map((k: any) => {
-    const openTime = new Date(k[0]);
+  // Sort raw data chronologically by timestamp and filter out duplicate timestamps
+  const timeMap = new Map<number, any>();
+  for (const k of rawData) {
+    if (!k || !Array.isArray(k) || k.length < 5) continue;
+    const rawTime = typeof k[0] === 'number' ? k[0] : new Date(k[0]).getTime();
+    if (!Number.isFinite(rawTime) || isNaN(rawTime)) continue;
+    timeMap.set(rawTime, k);
+  }
+
+  const sortedTimestamps = Array.from(timeMap.keys()).sort((a, b) => a - b);
+  if (sortedTimestamps.length === 0) return [];
+
+  const validCandles: Candle[] = [];
+
+  for (const ts of sortedTimestamps) {
+    const k = timeMap.get(ts);
+    const openTime = new Date(ts);
+
     let open = parseFloat(k[1]);
     let high = parseFloat(k[2]);
     let low = parseFloat(k[3]);
     let close = parseFloat(k[4]);
-    const volume = parseFloat(k[5]);
+    const volume = k[5] !== undefined ? parseFloat(k[5]) : 0;
+
+    // Strict numerical and finite boundary checks
+    if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+      continue;
+    }
+    if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+      continue;
+    }
+    // High must be >= open & close, low must be <= open & close
+    if (high < open || high < close || low > open || low > close || high < low) {
+      continue;
+    }
+
     const timeStr = openTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     // Apply offset if available from user calibration settings
@@ -239,13 +268,13 @@ export async function fetchRealCandlesFromAPI(market: MarketSymbol, timeframe: s
       close += offset;
     }
 
-    return {
+    validCandles.push({
       time: timeStr,
       open,
       high,
       low,
       close,
-      volume,
+      volume: Number.isFinite(volume) ? volume : 0,
       haOpen: open,
       haHigh: high,
       haLow: low,
@@ -255,14 +284,18 @@ export async function fetchRealCandlesFromAPI(market: MarketSymbol, timeframe: s
       superTrendTrend: 'bear',
       adx: 20,
       atr: 0,
-    };
-  });
+    });
+  }
+
+  if (validCandles.length === 0) {
+    return [];
+  }
 
   // Calculate standard indicators dynamically
-  calculateTechnicalIndicators(candles, market);
-  detectSMCAndLiquidity(candles, market);
+  calculateTechnicalIndicators(validCandles, market);
+  detectSMCAndLiquidity(validCandles, market);
 
-  return candles;
+  return validCandles;
 }
 
 // Generate initial list of candles for simulation
@@ -417,12 +450,14 @@ export function calculateTechnicalIndicators(candles: Candle[], market: MarketSy
       }
     }
 
-    // ADX simulation (trending ADX follows trend strengths)
+    // Deterministic ADX calculation based on price action and trend strength (no Math.random())
     if (i > 0) {
       const prev = candles[i - 1];
-      const isTrending = Math.abs(c.ema50 - c.ema200) > meta.step * 5;
-      const targetADX = isTrending ? 38 + Math.random() * 12 : 14 + Math.random() * 8;
-      c.adx = prev.adx * 0.9 + targetADX * 0.1;
+      const emaSpread = Math.abs(c.ema50 - c.ema200);
+      const normalizedSpread = meta.step > 0 ? emaSpread / meta.step : 0;
+      // Deterministic scaling of ADX between 10 (weak/flat) and 55 (strong trend)
+      const baseTrendAdx = Math.min(55, Math.max(12, 14 + normalizedSpread * 1.8));
+      c.adx = parseFloat((prev.adx * 0.88 + baseTrendAdx * 0.12).toFixed(2));
     } else {
       c.adx = 22;
     }
@@ -770,10 +805,8 @@ export function getSmartTrendCondition(lastCandle?: Candle): TrendCondition {
   return 'Strong Bearish';
 }
 
-// Scan other timeframes simulated trends
 export function getMtfScannerResults(market: MarketSymbol): Record<string, TrendScannerResult> {
-  // Let's create reproducible but realistic scanner results based on market bases
-  const rand = Math.random();
+  // Deterministic scanner results based on market structure
   
   if (market === 'XAUUSD') {
     return {
@@ -850,8 +883,43 @@ export function generateSmartSignal(
   isScalpMode: boolean = true
 ): TradingSignal {
   const meta = MARKET_BASES[market];
-  const safeCandles: Candle[] = (candles && candles.length > 0) ? candles : generateInitialCandles(market, 60);
-  const last: Candle = safeCandles[safeCandles.length - 1] || generateInitialCandles(market, 1)[0];
+  
+  // Prevent generating signals when valid candles are missing or insufficient (< 5 candles)
+  if (!candles || !Array.isArray(candles) || candles.length < 5) {
+    const fallbackPrice = (candles && candles.length > 0) ? candles[candles.length - 1].close : meta.base;
+    return {
+      id: `sig-wait-${Date.now()}`,
+      market,
+      type: 'BUY LIMIT',
+      quality: 'C',
+      qualityScore: 0,
+      entry: fallbackPrice,
+      zoneMin: fallbackPrice,
+      zoneMax: fallbackPrice,
+      sl: fallbackPrice,
+      tp1: fallbackPrice,
+      tp2: fallbackPrice,
+      tp3: fallbackPrice,
+      status: 'Cancelled',
+      points: 0,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timeframe,
+      isStrictSMC: strictSMCFilter,
+      isSmartManaged,
+      isScalp: isScalpMode,
+      strategyCategory: 'MARKET',
+      smcVerifiedDetails: {
+        trendClear: false,
+        preLiquidity: false,
+        impulsiveCandle: false,
+        previousBounce: false,
+        freshZone: false,
+      },
+    };
+  }
+
+  const safeCandles: Candle[] = candles;
+  const last: Candle = safeCandles[safeCandles.length - 1];
   const currentPrice = last.close || meta.base;
   const atr = Math.max(last.atr || meta.step * 2, meta.step * 1.5);
   
@@ -1009,8 +1077,16 @@ export function generateSmartSignal(
   // Set determined order type: BUY LIMIT / SELL LIMIT for Scalping Limit
   const determinedType = overrideType || (instantExecution ? (isShortValue ? 'SELL' : 'BUY') : (isShortValue ? 'SELL LIMIT' : 'BUY LIMIT'));
 
+  const defaultSource = market === 'XAUUSD' 
+    ? 'Spot Gold (PAXGUSDT reference)' 
+    : (market === 'BTCUSD' ? 'Binance Spot' : 'Yahoo Finance Spot Feed');
+
+  const creationTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const creationTs = Date.now();
+  const dir = determinedType.startsWith('BUY') ? 'BUY' : 'SELL';
+
   return {
-    id: `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    id: `sig-${creationTs}-${Math.floor(Math.random() * 1000)}`,
     market,
     type: determinedType,
     quality,
@@ -1022,10 +1098,21 @@ export function generateSmartSignal(
     tp1,
     tp2,
     tp3,
+    dataSource: defaultSource,
+    originalSnapshot: Object.freeze({
+      entry: Number(entry),
+      sl: Number(sl),
+      tp1: Number(tp1),
+      time: String(creationTime),
+      createdAtTimestamp: Number(creationTs),
+      timeframe: String(timeframe),
+      market: market,
+      direction: dir,
+    }),
     status: instantExecution ? 'Active' : 'Pending',
     points: 0,
     hasAlertedActivated: instantExecution,
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    time: creationTime,
     timeframe,
     isStrictSMC: strictSMCFilter,
     isSmartManaged,
@@ -1056,15 +1143,25 @@ export interface LiveTickResult {
   };
 }
 
-export function applyLiveTick(candles: Candle[], activeSignals: TradingSignal[], market: MarketSymbol): LiveTickResult {
+export function applyLiveTick(
+  candles: Candle[],
+  activeSignals: TradingSignal[],
+  market: MarketSymbol,
+  isRealMarketData: boolean = false
+): LiveTickResult {
   const meta = MARKET_BASES[market];
   const count = candles.length;
   if (count === 0) return { updatedCandles: candles, updatedSignals: activeSignals };
 
+  // In real market data mode, never generate synthetic prices or evaluate trades based on simulated ticks
+  if (isRealMarketData) {
+    return { updatedCandles: candles, updatedSignals: activeSignals };
+  }
+
   const lastIdx = count - 1;
   const lastCandle = { ...candles[lastIdx] };
 
-  // Simulate small price variation (ticks)
+  // Simulate small price variation (ticks) only for local test simulation mode
   const volatilityFactor = lastCandle.atr * 0.15;
   const tickChange = (Math.random() - 0.5) * volatilityFactor;
   

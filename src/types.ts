@@ -41,8 +41,24 @@ export interface TradingSignal {
   tp2: number;
   tp3: number;
   tp4?: number;
-  status: 'Pending' | 'Active' | 'TP1' | 'TP2' | 'TP3' | 'SL' | 'Cancelled';
+  dataSource?: string;
+  originalSnapshot?: {
+    entry: number;
+    sl: number;
+    tp1: number;
+    time: string;
+    createdAtTimestamp: number;
+    timeframe: string;
+    market: MarketSymbol;
+    direction: 'BUY' | 'SELL';
+  };
+  resolvedAt?: string;
+  resolvedAtTimestamp?: number;
+  status: 'Pending' | 'Active' | 'TP1' | 'TP2' | 'TP3' | 'SL' | 'Cancelled' | 'AMBIGUOUS' | 'EXPIRED';
   points: number;
+  rMultiple?: number;
+  spreadCost?: number;
+  slippageCost?: number;
   time: string;
   timeframe?: string;
   day?: string;

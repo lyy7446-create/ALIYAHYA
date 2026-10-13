@@ -41,7 +41,7 @@ export const Home: React.FC<HomeProps> = ({
        market === 'US30' ? currentPrice.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) :
        market === 'XAUUSD' ? currentPrice.toFixed(2) :
        currentPrice.toFixed(4))
-    : (market === 'XAUUSD' ? '2,785.40' : market === 'EURUSD' ? '1.0850' : '0.00');
+    : (isLiveConnected ? "0.00" : "DATA_UNAVAILABLE");
 
   // Digits and formatting helper
   const formatVal = (val: number | string | undefined): string => {
@@ -61,36 +61,26 @@ export const Home: React.FC<HomeProps> = ({
     return num.toFixed(2);
   };
 
-  // Trade plan derivation
-  const tradePlan = activeSignal ? {
+  // Trade plan derivation strictly from real data
+  const tradePlan = (activeSignal && isLiveConnected) ? {
     entry: formatVal(activeSignal.entry),
     sl: formatVal(activeSignal.sl),
     tp1: formatVal(activeSignal.tp1),
     tp2: formatVal(activeSignal.tp2),
     tp3: formatVal(activeSignal.tp3),
-  } : {
-    entry: currentPrice ? formatVal(currentPrice) : '2785.40',
-    sl: currentPrice ? formatVal(market === 'XAUUSD' ? currentPrice - 6.5 : currentPrice * 0.996) : '2778.90',
-    tp1: currentPrice ? formatVal(market === 'XAUUSD' ? currentPrice + 5.0 : currentPrice * 1.004) : '2790.40',
-    tp2: currentPrice ? formatVal(market === 'XAUUSD' ? currentPrice + 12.0 : currentPrice * 1.009) : '2797.40',
-    tp3: currentPrice ? formatVal(market === 'XAUUSD' ? currentPrice + 22.0 : currentPrice * 1.016) : '2807.40',
-  };
+  } : undefined;
 
-  const signalData = activeSignal ? {
+  const signalData = (activeSignal && isLiveConnected) ? {
     direction: activeSignal.type,
     confidence: activeSignal.qualityScore || 94,
     reason: `كسر هيكل السوق واختراق السيولة مع تأكيد نموذج المؤسسات (${activeSignal.quality})`
-  } : {
-    direction: 'BUY',
-    confidence: 94,
-    reason: 'تمركز سيولة مؤسسية متوافقة مع الاتجاه الصاعد وفجوة FVG'
-  };
+  } : undefined;
 
   const [autoExecution, setAutoExecution] = React.useState<boolean>(() => {
     return localStorage.getItem('mm_vip_deriv_auto_execution') === 'true';
   });
   const [accountType, setAccountType] = React.useState<"DEMO" | "REAL">(() => {
-    return (localStorage.getItem('mm_vip_deriv_account_type') as "DEMO" | "REAL") || (derivApiToken ? "REAL" : "DEMO");
+    return (localStorage.getItem('mm_vip_deriv_account_type') as "DEMO" | "REAL") || "DEMO";
   });
 
   const derivData = {

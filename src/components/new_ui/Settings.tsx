@@ -28,12 +28,15 @@ export const Settings: React.FC<SettingsProps> = ({
         email: Boolean(alertSettings.email && alertSettings.emailAddress),
     };
 
+    const storedAutoExecution = localStorage.getItem('mm_vip_deriv_auto_execution') === 'true';
+    const storedAccountType = (localStorage.getItem('mm_vip_deriv_account_type') as "DEMO" | "REAL") || 'DEMO';
+
     const derivData = {
         connected: Boolean(alertSettings.derivApiToken),
         appId: '1089',
         apiToken: alertSettings.derivApiToken || '',
-        accountType: alertSettings.derivApiToken ? 'REAL' : 'DEMO',
-        autoExecution: true,
+        accountType: storedAccountType,
+        autoExecution: storedAutoExecution,
     };
 
     const telegramData = {
@@ -92,12 +95,27 @@ export const Settings: React.FC<SettingsProps> = ({
                 <DerivPanel 
                     deriv={derivData}
                     onSave={(updated) => {
-                        if (updated?.apiToken) {
-                            onUpdateAlertSettings({
-                                ...alertSettings,
-                                derivApiToken: updated.apiToken.includes('•••') ? alertSettings.derivApiToken : updated.apiToken,
-                            });
+                        if (updated) {
+                            if (updated.autoExecution !== undefined) {
+                                localStorage.setItem('mm_vip_deriv_auto_execution', String(updated.autoExecution));
+                            }
+                            if (updated.accountType) {
+                                localStorage.setItem('mm_vip_deriv_account_type', updated.accountType);
+                            }
+                            if (updated.apiToken) {
+                                onUpdateAlertSettings({
+                                    ...alertSettings,
+                                    derivApiToken: updated.apiToken.includes('•••') ? alertSettings.derivApiToken : updated.apiToken,
+                                });
+                            }
                         }
+                    }}
+                    onAccountTypeChange={(type) => {
+                        localStorage.setItem('mm_vip_deriv_account_type', type);
+                    }}
+                    onExecutionToggle={() => {
+                        const current = localStorage.getItem('mm_vip_deriv_auto_execution') === 'true';
+                        localStorage.setItem('mm_vip_deriv_auto_execution', String(!current));
                     }}
                 />
 
